@@ -4,20 +4,11 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
-#include <fftw3.h>
+
+
+#include "fft_helper.cuh"
 
 using std::vector;
-
-
-vector<float> getFreq(float df, int M) {
-    vector<float> freq(M);
-    for (int i=0; i < freq.size(); i++) {
-        freq[i] = df * (-M/2.0 +i);
-    }
-    return freq;
-}
-
-
 
 // DFT with non-uniform input data. This computes the unnormalized transform.
 // Start by computing the uniform frequency spacing and then use DFT to compute
@@ -53,49 +44,16 @@ struct Param computeGridParams(const int M, const float eps) {
     return param;
 }
 
-// CPU FFT on a regular grid using FFTW
-vector<Complex> fftCpu(vector<float> inp, const int iflag) {
-    int n = inp.size();
-    vector<Complex> out(n);
-    fftwf_plan p;
-    fftwf_complex *inCopied;
-    fftwf_complex *outTemp;
-    inCopied = (fftwf_complex*) fftw_malloc(sizeof(fftwf_complex) * n);
-    outTemp = (fftwf_complex*) fftw_malloc(sizeof(fftwf_complex) * n);
-    for (int i=0; i< n; i++) {
-        inCopied[i][0] = inp[i];
-        inCopied[i][1] = 0.0f;
-    }
-
-    if (iflag < 0) {
-        p =  fftwf_plan_dft_1d(n, inCopied, outTemp, FFTW_FORWARD, FFTW_ESTIMATE);
-    } else {
-        // Cast inp in fftw_complex and use regular fftw
-        p =  fftwf_plan_dft_1d(n, inCopied, outTemp, FFTW_BACKWARD, FFTW_ESTIMATE);
-    }
-
-    fftwf_execute(p);
-
-    for (int i=0; i < n; i++) {
-        out[i] = Complex(outTemp[i][0], outTemp[i][1]);
-    }
-
-    fftw_free(inCopied);
-    fftw_free(outTemp);
-    fftwf_destroy_plan(p);
-    return out;
-}
-
 
 // CPU Implementation of a Non-Uniform Fast-Fourier Transform by interpolation
 // with a reasonably sized Gaussian kernel (Dutt & Rokhlin, 1993) and then FFT
 // with FFTW. And finally undo the effect of the Gaussian kernel by dividing its
 // Fourier transform in the frequency domain.
 // Also see http://jakevdp.github.io/blog/2015/02/24/optimizing-python-with-numpy-and-numba/
-vector<Complex> nufftCpu(const vector<float> x, const vector<float> y, const int M,
+vector<Complex> nufftCpu(const vector<float> x, const vector<float> y, const int M, const bool gpuFFT,
       const float df, const float eps, const int iflag) {
 
-    std::cout << "Starting CPU NUFFT\n";
+    std::cout << "Starting CPU/Hybrid NUFFT\n";
     struct Param param = computeGridParams(M, eps);
     int N = x.size();
 
@@ -109,6 +67,8 @@ vector<Complex> nufftCpu(const vector<float> x, const vector<float> y, const int
     std::iota(mm.begin(), mm.end(), -param.Msp);
     vector<float> kernel(mm.size(), 0);
 
+    std::cout << "Gridding kernel has size " << mm.size() << "; grid has size " << param.Mr << ".\n";
+
     for (int i = 0; i < N; ++i) {
         float xi = fmodf((x[i] * df), (2.0f * PI));
         int m = 1 + static_cast<int>(xi / hx);
@@ -118,13 +78,20 @@ vector<Complex> nufftCpu(const vector<float> x, const vector<float> y, const int
         // Convolution
         for (int j = 0; j < kernel.size(); j++) {
             int index = (m + mm[j]) % param.Mr;
-            if (index < 0) index += param.Mr;
+            // So that we end up with a positive modulo always.
+            if (index < 0) {index += param.Mr};
             ftau[index] += y[i] * kernel[j];
         }
     }
 
     // Compute FFT on the convolved grid.
-    Ftau = fftCpu(ftau, iflag);
+    if (gpuFFT) {
+       Ftau = fftGpu(ftau, iflag);
+       std::cout << "FFT with GPU\n";
+    } else {
+        std::cout << "FFT with CPU\n";
+        Ftau = fftCpu(ftau, iflag);
+    }
     for (int i = (Ftau.size() - M / 2); i < Ftau.size(); ++i) {
         yt[i - static_cast<int>(Ftau.size()) + M / 2] = Ftau[i] / static_cast<float>(param.Mr);
     }
@@ -136,6 +103,6 @@ vector<Complex> nufftCpu(const vector<float> x, const vector<float> y, const int
     for (int i = 0; i < yt.size(); i++) {
         yt[i] = (1.0f / N) * sqrtf(PI / param.tau) * expf(param.tau * powf(k[i], 2)) * yt[i];
     }
-    std::cout << "Done with CPU NUFFT \n";
+    std::cout << "Done with CPU/Hybrid NUFFT \n";
     return yt;
 }
