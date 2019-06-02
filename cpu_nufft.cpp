@@ -29,20 +29,8 @@ vector<Complex> nudft(vector<float> x, vector<float> y, int M, float df) {
 }
 
 // //////////////////////////////////////////////////////////////////////////////
-// Fast NUFFT implementation. Gridding with a Gaussian kernel and FFT with FFTW3.
+// Fast NUFFT implementation. Gridding with a Gaussian kernel and FFT with FFTW3 or CUFFT.
 // /////////////////////////////////////////////////////////////////////////////
-
-struct Param computeGridParams(const int M, const float eps) {
-    // Choosing the interpolation Gaussian kernel parameters based on Dutt & Rohklin (1993)
-    struct Param param;
-    param.tau = 0.0f;
-    // Oversampling ratio. ratio=3 gives higher accuracy.
-    int ratio = 3;
-    param.Msp = static_cast<int>(-std::log(eps) / (PI * (ratio - 1) / (ratio - 0.5f)) + 0.5f);
-    param.Mr = std::max(2 * param.Msp, ratio * M);
-    param.tau = PI * (param.Msp/ (ratio * (ratio - 0.5f))) / powf(M, 2.0f);
-    return param;
-}
 
 
 // CPU Implementation of a Non-Uniform Fast-Fourier Transform by interpolation
@@ -92,6 +80,7 @@ vector<Complex> nufftCpu(const vector<float> x, const vector<float> y, const int
         std::cout << "FFT with CPU\n";
         Ftau = fftCpu(ftau, iflag);
     }
+
     for (int i = (Ftau.size() - M / 2); i < Ftau.size(); ++i) {
         yt[i - static_cast<int>(Ftau.size()) + M / 2] = Ftau[i] / static_cast<float>(param.Mr);
     }

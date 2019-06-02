@@ -34,9 +34,34 @@ void compareComplexVectors(vector<Complex> v1, vector<Complex> v2, float eps) {
 
 
 //
-// Compare CPU and GPU implementation results.
+// Compare CPU and GPU NUFFT with Gaussian gridding.
 //
-void cpuGpu1DTest() {
+void runCpuGpu1DTest(int testSize, int M) {
+    if (M % 2 == 1) {
+        std::cerr << "I haven't figured out how to do odd number of frequency bins yet.\n";
+        exit(1);
+    }
+    // Compare CPU 1D NUDFT and NUFFT implementations.
+    std::cout << "Comparing 1D CPU and GPU Non-uniform FFT with " << testSize <<" samples and " << M <<
+              " frequency bins...\n";
+    std::cout << "The signal contains 3 different frequencies and a bit of noise.\n";
+    vector<float> x(testSize);
+    vector<float> y(testSize);
+    for (int i=0; i< testSize; ++i) {
+        x[i] = static_cast <float> (rand()) / (static_cast <float> (RAND_MAX/(50)));
+        y[i] = sin(x[i]) + sin(2.0f * x[i]) + sin(7.0f * x[i]) +
+               static_cast<float>(rand()) / static_cast<float>(RAND_MAX/(50));
+    }
+    auto start = std::chrono::high_resolution_clock::now();
+    vector<Complex> ans = nufftCpu(x, y, M);
+    auto stop1 = std::chrono::high_resolution_clock::now();
+    vector<Complex> ans2 = nufftGpu(x, y, M);
+    auto stop2 = std::chrono::high_resolution_clock::now();
+    compareComplexVectors(ans, ans2, 1e-4);
+    auto duration1 = std::chrono::duration_cast<std::chrono::milliseconds>(stop1 - start);
+    auto duration2 = std::chrono::duration_cast<std::chrono::milliseconds>(stop2 - stop1);
+    std::cout << "CPU NUFFT completed in " << duration1.count() << " ms\n";
+    std::cout << "GPU NUFFT completed in " << duration2.count() << " ms\n";
 }
 
 //
@@ -118,8 +143,10 @@ int main(int argc, char **argv) {
     queryGpus();
     printDividingLine();
     srand (time(NULL));
-    runCpu1DTest(100000, 500);
+    // runCpu1DTest(100000, 500);
     printDividingLine();
-    // runCpuHybridTest(50000000, 500);
+    // runCpuHybridTest(50000000, 5000);
+    printDividingLine();
+    runCpuGpu1DTest(50000000,5000);
     return 0;
 }

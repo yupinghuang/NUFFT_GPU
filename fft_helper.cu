@@ -9,6 +9,29 @@
 using std::vector;
 
 
+vector<float> getFreq(float df, int M) {
+    vector<float> freq(M);
+    for (int i=0; i < freq.size(); i++) {
+        freq[i] = df * (-M/2.0f +i);
+    }
+    return freq;
+}
+
+
+// Compute parameters for gridding.
+struct Param computeGridParams(const int M, const float eps) {
+    // Choosing the interpolation Gaussian kernel parameters based on Dutt & Rohklin (1993)
+    struct Param param;
+    param.tau = 0.0f;
+    // Oversampling ratio. ratio=3 gives higher accuracy.
+    int ratio = 3;
+    param.Msp = static_cast<int>(-std::log(eps) / (PI * (ratio - 1) / (ratio - 0.5f)) + 0.5f);
+    param.Mr = std::max(2 * param.Msp, ratio * M);
+    param.tau = PI * (param.Msp/ (ratio * (ratio - 0.5f))) / powf(M, 2.0f);
+    return param;
+}
+
+
 // CPU FFT on a regular grid using FFTW
 vector<Complex> fftCpu(vector<float> inp, const int iflag) {
     int n = inp.size();
@@ -42,13 +65,6 @@ vector<Complex> fftCpu(vector<float> inp, const int iflag) {
     return out;
 }
 
-vector<float> getFreq(float df, int M) {
-    vector<float> freq(M);
-    for (int i=0; i < freq.size(); i++) {
-        freq[i] = df * (-M/2.0 +i);
-    }
-    return freq;
-}
 
 void callCufft(cufftComplex *dev_in, cufftComplex *dev_out, int n, const int iflag) {
     cufftHandle plan;
