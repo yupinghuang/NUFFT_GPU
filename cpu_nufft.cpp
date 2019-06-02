@@ -79,7 +79,7 @@ vector<Complex> nufftCpu(const vector<float> x, const vector<float> y, const int
         for (int j = 0; j < kernel.size(); j++) {
             int index = (m + mm[j]) % param.Mr;
             // So that we end up with a positive modulo always.
-            if (index < 0) {index += param.Mr};
+            if (index < 0) { index += param.Mr; };
             ftau[index] += y[i] * kernel[j];
         }
     }

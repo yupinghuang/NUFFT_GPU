@@ -21,7 +21,7 @@ set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} ${CXX_FLAGS}")
 set(CMAKE_CUDA_FLAGS "${CUDA_NVCC_FLAGS} -O3 -D_REENTRANT ${NVCC_GENCODES}" )
 
 
-add_executable(NUFFT main.cpp cpu_nufft.cpp cpu_nufft.hpp gpu_nufft.cu gpu_nufft.cuh fft_helper.cu fft_helper.cuh)
+add_executable(NUFFT main.cpp cpu_nufft.cpp cpu_nufft.hpp gpu_nufft.cu gpu_nufft.cuh fft_helper.cu fft_helper.cuh ta_utilities.cpp ta_utilities.hpp)
 set_target_properties(NUFFT PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 target_link_libraries(NUFFT fftw3f)
 target_link_libraries(NUFFT fftw3)

@@ -61,7 +61,7 @@ void runCpu1DTest(int testSize, int M) {
     auto start = std::chrono::high_resolution_clock::now();
     vector<Complex> ans = nudft(x, y, M, 1.0);
     auto stop1 = std::chrono::high_resolution_clock::now();
-    vector<Complex> ans2 = nufftCpu(x, y, M);
+    vector<Complex> ans2 = nufftCpu(x, y, M, false, 1.0);
     auto stop2 = std::chrono::high_resolution_clock::now();
     compareComplexVectors(ans, ans2, 1e-4);
     auto duration1 = std::chrono::duration_cast<std::chrono::milliseconds>(stop1 - start);
@@ -91,9 +91,9 @@ void runCpuHybridTest(int testSize, int M) {
                static_cast<float>(rand()) / static_cast<float>(RAND_MAX/(50));
     }
     auto start = std::chrono::high_resolution_clock::now();
-    vector<Complex> ans = nufftCpu(x, y, M);
+    vector<Complex> ans = nufftCpu(x, y, M, false, 1.0);
     auto stop1 = std::chrono::high_resolution_clock::now();
-    vector<Complex> ans2 = nufftCpu(x, y, M, true);
+    vector<Complex> ans2 = nufftCpu(x, y, M, true, 1.0);
     auto stop2 = std::chrono::high_resolution_clock::now();
     compareComplexVectors(ans, ans2, 1e-4);
     auto duration1 = std::chrono::duration_cast<std::chrono::milliseconds>(stop1 - start);
@@ -112,13 +112,14 @@ void runTest(int argc, char **argv) {
 
 
 int main(int argc, char **argv) {
-    //TA_Utilities::select_coldest_GPU();
-    //int max_time_allowed_in_seconds = 300;
-    //TA_Utilities::enforce_time_limit(max_time_allowed_in_seconds);
+    TA_Utilities::select_coldest_GPU();
+    int max_time_allowed_in_seconds = 1200;
+    TA_Utilities::enforce_time_limit(max_time_allowed_in_seconds);
     queryGpus();
-    srand (time(NULL));
-    runCpu1DTest(100000, 100);
     printDividingLine();
-    runCpuHybridTest(50000000, 100);
+    srand (time(NULL));
+    runCpu1DTest(100000, 500);
+    printDividingLine();
+    // runCpuHybridTest(50000000, 500);
     return 0;
 }
