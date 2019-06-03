@@ -183,7 +183,7 @@ runtime of the kernel. It is still pretty fast (1353ms for 5e7 input and frequen
 improvement. Note that the input x are completely randomized, so this probably helps atomicAdd by not having hot
 grid points.
 
-### ILP Gridder
+#### ILP Gridder
 This is basically the naive gridder with some assumptions. The kernel size only depends on the precision needed and is
 29 for all of the reasonable test cases. So I used #pragma unroll 29 before the loop so that nvcc would unroll the loop.
 Also I removed a couple assignment statements to remove instruction dependencies. Finally I substitute instrinsics for
