@@ -150,7 +150,7 @@ The number 5 * 10<sup>7</sup> is chosen to be my target input size for the GPU i
 elaborate mechanism for generating test data, it seems like I can have up to 300000 frequency bins without losing
 numerical stability, which is two orders of magnitude lower than what I am targeting.
 
-### Overview of Algorithm
+## Overview of Algorithm
 Suppose we want to transform N non-uniformly spaced (x,y) pair onto M frequencies. The x<sub>i</sub>s are not assumed
 to be ordered.The NUFFT algorithm relies on the
 clever construction of a Gaussian kernel of size K (it ends up being 29 for all of my test cases). It then interpolates
@@ -165,7 +165,7 @@ runtime of O(M\*r log (M\*r)).
 Finally, we undo the gridding kernel in the frequency domain by diving out its Fourier transform which is also a
 Gaussian. This has a runtime of O(M).
 
-### GPU Implementation
+## GPU Implementation
 The GPU implementation has three steps: gridding, FFT, and post-processing. Gridding interpolates the data onto the
 oversampled grid. FFT calls CUFFT to do the FFT. Post-processing does the undoing gridding kernel and choosing the right
 frequencies out of the oversampled frequency grid, as well as doing the 1/N scaling.
@@ -176,28 +176,28 @@ faster. The main difficulty is that the grid would not fit in shared memory. It 
 harness the Hermitian structure of the input/output and reduce the FFT runtime (which I did not have time to try
 out here).
 
-#### Naive Gridder
+### Naive Gridder
 The naive gridder has N number of threads, each doing its own share of multiplication with the kernel and then
 atomicAdd to the device memory. Testing by deleting parts of the code showed that the atomicAdd took up ~95% of the
 runtime of the kernel. It is still pretty fast (1353ms for 5e7 input and frequency bins) but there's room for
 improvement. Note that the input x are completely randomized, so this probably helps atomicAdd by not having hot
 grid points.
 
-#### ILP Gridder
+### ILP Gridder
 This is basically the naive gridder with some assumptions. The kernel size only depends on the precision needed and is
 29 for all of the reasonable test cases. So I used #pragma unroll 29 before the loop so that nvcc would unroll the loop.
 Also I removed a couple assignment statements to remove instruction dependencies. Finally I substitute instrinsics for
 the math functions (e.g. \_\_expf)whenever possible. This has a 20% improvement over the NAIVE gridder in the largest
 testcase (5e7 input and 5e7 output).
 
-#### PARALLEL Gridder
+### PARALLEL Gridder
 The thought was that if I introduce another blockDim with size that of the number of grid points (M * r), and just
 have each column of blocks sum to one single single grid point with reduction, I would reduce the number of atomicAdd
 call to device memory. But this didn't quite work out. For 5e7 samples and 1e5 frequency bins, 
 reading the data takes ~43s; the main computation took 250s; the reduction took another 30s. It seems like there's not
 much latency to hide here and therefore I just ended up with 10<sup>12</sup> threads waiting for SM resources.
 
-#### SHMEM Gridder
+### SHMEM Gridder
 I thought about sorting the input x<sub>i</sub>s (or rather x<sub>i</sub> * df % (2pi))first and then divide the grid
 into shared-memory sized sub-grids. Then I can do a subset of the input for a subset of the grid on a given block.
 But sorting on GPU can be expensive too so I thought I'd do a proof on concept with a grid size of 12000 (4000
