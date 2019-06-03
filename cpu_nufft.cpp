@@ -41,7 +41,9 @@ vector<Complex> nudft(vector<float> x, vector<float> y, int M, float df) {
 vector<Complex> nufftCpu(const vector<float> x, const vector<float> y, const int M, const bool gpuFFT,
       const float df, const float eps, const int iflag) {
 
-    std::cout << "Starting CPU/Hybrid NUFFT\n";
+    std::string type = gpuFFT ? "Hybrid" : "CPU";
+
+    std::cout << "Starting " << type <<" NUFFT\n";
     struct Param param = computeGridParams(M, eps);
     int N = x.size();
 
@@ -92,6 +94,6 @@ vector<Complex> nufftCpu(const vector<float> x, const vector<float> y, const int
     for (int i = 0; i < yt.size(); i++) {
         yt[i] = (1.0f / N) * sqrtf(PI / param.tau) * expf(param.tau * powf(k[i], 2)) * yt[i];
     }
-    std::cout << "Done with CPU/Hybrid NUFFT \n";
+    std::cout << "Done with " << type << " NUFFT \n";
     return yt;
 }
