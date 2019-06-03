@@ -15,6 +15,7 @@ __global__
 void
 naiveGriddingKernel(float *dev_x, float *dev_y, cufftComplex *dev_ftau, float df, float tau,
                     int N, int Mr, int kernelSize) {
+    // Parallelization of the CPU code.
     int threadId = threadIdx.x + blockDim.x * blockIdx.x;
     float hx = 2 * CUDART_PI_F / Mr;
     if (threadId < N) {
@@ -24,7 +25,6 @@ naiveGriddingKernel(float *dev_x, float *dev_y, cufftComplex *dev_ftau, float df
             int mmj = -(kernelSize / 2) + j;
             float kj = expf(-0.25f * powf(xi - hx * (m + mmj), 2) / tau);
             // Assuming Mr > Msp i.e. grid size greater than half of the kernel size which is v reasonable
-            // TODO modulo instructions are apparently expensive.
             int index = (m + mmj + Mr) % Mr;
             atomicAdd(&(dev_ftau[index].x), dev_y[threadId] * kj);
         }
@@ -36,17 +36,20 @@ __global__
 void
 instructionOptimizedGriddingKernel(float *dev_x, float *dev_y, cufftComplex *dev_ftau, float df, float tau,
                     int N, int Mr, int kernelSize) {
-    // same as NAIVE but with intrinsics and ILP for speeding up.
+    // same as NAIVE but with intrinsics and ILP for speeding up. The limitation is that I hard-coded the kernel-size.
     int threadId = threadIdx.x + blockDim.x * blockIdx.x;
     float hx = 2 * CUDART_PI_F / Mr;
+    // Hopefully this read is coalesced?
     float x = dev_x[threadId];
     float y = dev_y[threadId];
     float xi = fmodf(x * df, 2.0 * CUDART_PI_F);
     int m = 1 + ((int) (xi / hx));
     int kernelSizeOverTwo = KERNEL_SIZE / 2;
+    // Loop unrolling.
 #pragma unroll (29)
     for (int j = 0; j < KERNEL_SIZE; ++j) {
         if (threadId < N) {
+            // Removed instruction dependency; used instricsics __powf, __expf.
             atomicAdd(&(dev_ftau[(m - kernelSizeOverTwo + j + Mr) % Mr].x), y * (
                     __expf(-0.25f * __powf(xi - hx * (m + j - (kernelSizeOverTwo)), 2) / tau)));
         }
@@ -78,8 +81,8 @@ shmemGriddingKernel(float *dev_x, float *dev_y, cufftComplex *dev_ftau, float df
             int mmj = -(kernelSize / 2) + j;
             float kj = expf(-0.25f * powf(xi - hx * (m + mmj), 2) / tau);
             // Assuming Mr > Msp i.e. grid size greater than half of the kernel size which is v reasonable
-            // TODO modulo instructions are apparently expensive.
             int index = (m + mmj + Mr) % Mr;
+            // Accumulate on shared memory
             atomicAdd(&(shmem[index]), y * kj);
         }
     }
@@ -110,10 +113,8 @@ triedToBeParallelGriddingKernel(float *dev_x, float *dev_y, cufftComplex *dev_ft
         float xi = fmodf(x * df, 2.0 * CUDART_PI_F);
         int m = 1 + ((int) (xi / hx));
         // TODO can do some math so that we only have at most three iterations here.
-        // mmj + m = index, index-Mr, or index+Mr.
         for (int j = 0; j < kernelSize; ++j) {
             int mmj = -(kernelSize / 2) + j;
-            // Assuming Mr > Msp i.e. grid size greater than half of the kernel size which is v reasonable
             int index = (m + mmj + Mr) % Mr;
             if (index == blockIdx.y) {
                 float kj = expf(-0.25f * powf(xi - hx * (m + mmj), 2) / tau);
@@ -143,16 +144,18 @@ void postProcessingKernel(cufftComplex *dev_Ftau, cufftComplex *dev_yt, float* d
         int N, int M, int Mr, float tau) {
     // M/2 threads are needed here.
     int threadId = threadIdx.x + blockDim.x * blockIdx.x;
-    float t1x, t1y, t2x, t2y;
+    float t1x = dev_Ftau[threadId - M/2 + Mr].x / Mr;
+    float t1y = dev_Ftau[threadId - M/2 + Mr].y / Mr;
+    float t2x = dev_Ftau[threadId].x / Mr;
+    float t2y = dev_Ftau[threadId].y / Mr;
     if (threadId < M/2) {
-        t1x = dev_Ftau[threadId - M/2 + Mr].x / Mr;
-        t1y = dev_Ftau[threadId - M/2 + Mr].y / Mr;
-        t2x = dev_Ftau[threadId].x / Mr;
-        t2y = dev_Ftau[threadId].y / Mr;
+        // Undo the gridding kernel. Also normalize by 1/N
         dev_yt[threadId].x = (1.0 / N) * sqrtf(CUDART_PI_F/tau) * expf(tau * powf(dev_kvec[threadId], 2.0)) * t1x;
         dev_yt[threadId].y = (1.0 / N) * sqrtf(CUDART_PI_F/tau) * expf(tau * powf(dev_kvec[threadId], 2.0)) * t1y;
-        dev_yt[threadId + M/2].x = (1.0 / N) * sqrtf(CUDART_PI_F/tau) * expf(tau * powf(dev_kvec[threadId + M/2], 2.0)) * t2x;
-        dev_yt[threadId + M/2].y = (1.0 / N) * sqrtf(CUDART_PI_F/tau) * expf(tau * powf(dev_kvec[threadId + M/2], 2.0)) * t2y;
+        dev_yt[threadId + M/2].x = (1.0 / N) * sqrtf(CUDART_PI_F/tau) *
+                expf(tau * powf(dev_kvec[threadId + M/2], 2.0)) * t2x;
+        dev_yt[threadId + M/2].y = (1.0 / N) * sqrtf(CUDART_PI_F/tau) *
+                expf(tau * powf(dev_kvec[threadId + M/2], 2.0)) * t2y;
     }
 }
 
@@ -168,21 +171,21 @@ vector<Complex> nufftGpu(const vector<float> x, const vector<float> y, const int
     float *dev_x;
     float *dev_y;
     float *dev_kvec;
+    cufftComplex *dev_ftau;
+    cufftComplex *dev_Ftau;
+    cufftComplex *dev_yt;
+
+    // For timing the gridding kernel and the postProcessing kernel.
     cudaEvent_t start1, stop1, start2, stop2;
     cudaEventCreate(&start1);
     cudaEventCreate(&stop1);
     cudaEventCreate(&start2);
     cudaEventCreate(&stop2);
-    cufftComplex *dev_ftau;
-    cufftComplex *dev_Ftau;
-    cufftComplex *dev_yt;
 
-    // Allocate memory
     CUDA_CALL(cudaMalloc((void **) &dev_x, N * sizeof(float)));
     CUDA_CALL(cudaMalloc((void **) &dev_y, N * sizeof(float)));
     CUDA_CALL(cudaMalloc((void **) &dev_ftau, param.Mr * sizeof(cufftComplex)));
 
-    // Copy & initialize
     CUDA_CALL(cudaMemset(dev_ftau, 0, param.Mr * sizeof(cufftComplex)));
     CUDA_CALL(cudaMemcpy(dev_x, x.data(), N * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CALL(cudaMemcpy(dev_y, y.data(), N * sizeof(float), cudaMemcpyHostToDevice));
@@ -228,7 +231,7 @@ vector<Complex> nufftGpu(const vector<float> x, const vector<float> y, const int
     callCufft(dev_ftau, dev_Ftau, param.Mr, iflag);
     CUDA_CALL(cudaFree(dev_ftau));
 
-    // Reordering and de-gridding.
+    // Reordering and de-gridding (post-processing).
     CUDA_CALL(cudaMalloc((void **) &dev_yt, M * sizeof(cufftComplex)));
     CUDA_CALL(cudaMalloc((void **) &dev_kvec, M * sizeof(cufftComplex)));
     vector<float> k = getFreq(df, M);

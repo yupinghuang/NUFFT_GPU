@@ -9,6 +9,7 @@
 using std::vector;
 
 
+// Utility method for computing the array of frequencies given the number of frequency bins M.
 vector<float> getFreq(float df, int M) {
     vector<float> freq(M);
     for (int i=0; i < freq.size(); i++) {

@@ -14,11 +14,11 @@ using std::vector;
 using std::string;
 
 void printHelpAndExit() {
-    std::cerr << "Arguments: <testcase> <numSamples> <numFreqBin>\n";
+    std::cerr << "Arguments: <testcase> <numSamples> <numFreq>\n";
     std::cerr << "numFreqBin must be an even number. Parameters are ignored when testcase is demo\n";
     std::cerr << "Test cases are: demo, cpu, hybrid, gpu-naive, gpu-ilp gpu-parallel gpu-shmem.\n";
     std::cerr << "gpu-parallel is very slow.\n";
-    std::cerr << "gpu-shem only takes numFreqVub up to 4000 (number that would fit in the TIAN X shared memory).\n";
+    std::cerr << "gpu-shem only takes numFreq up to 4000 (number that would fit in the TIAN X shared memory).\n";
     exit(EXIT_FAILURE);
 }
 
