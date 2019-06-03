@@ -10,28 +10,88 @@
 
 using std::vector;
 
-int MAX_THREADS = 1024;
+#define MAX_THREADS 1024
+#define MAX_SHMEM 49152
+
+// For testing the #pragma unroll macro
+#define TEST_KERNEL_SIZE 29
+
 
 __global__
 void
-naiveGriddingKernel(float *dev_x, float *dev_y, cufftComplex *dev_ftau, float df, float tau,
-                    int N, int Mr, int kernelSize) {
+useUpSharedMemoryGriddingKernel(float *dev_x, float *dev_y, cufftComplex *dev_ftau, float df, float tau,
+                                int N, int Mr, int kernelSize, int shmemSize) {
+    // Use shared memory to do reduction for each block.
+    extern __shared__ float shmem[];
     int threadId = threadIdx.x + blockDim.x * blockIdx.x;
     float hx = 2 * CUDART_PI_F / Mr;
-    // Calculate the kernel
+    float x = dev_x[threadId];
+    float y = dev_y[threadId];
+    float xi = fmodf(x * df, 2.0 * CUDART_PI_F);
+    int m = 1 + ((int) (xi / hx));
+    for(int iter=0; shmemSize * iter < Mr; ++iter) {
+        if (threadId < N) {
+            for (int j = 0; j < kernelSize; ++j) {
+                int mmj = -(kernelSize / 2) + j;
+                float kj = expf(-0.25f * powf(xi - hx * (m + mmj), 2) / tau);
+                // Assuming Mr > Msp i.e. grid size greater than half of the kernel size which is v reasonable
+                int index = (m + mmj + Mr) % Mr;
+                // This is probably gonna cause bank conflict and warp divergence but still worth trying.
+                if (((iter +1)*shmemSize > index) && (index > iter*shmemSize)) {
+                    atomicAdd(&shmem[index], y * kj);
+                }
+            }
+        }
+        __syncthreads();
+        if (threadId==0) {
+            for
+        }
+    }
+}
+
+
+__global__
+void
+triedToBeParallelGriddingKernel(float *dev_x, float *dev_y, cufftComplex *dev_ftau, float df, float tau,
+                                int N, int Mr, int kernelSize) {
+    // blockIdx.y is the index to dev_ftau that this set of blocks is responsible for accumulating.
+    // The hope is that the threads would run in parallel and we can speed up by throwing away work.
+    int threadId = threadIdx.x + blockDim.x * blockIdx.x;
+    int tid = threadIdx.x;
+    extern __shared__ float sumReal[];
+    sumReal[tid] = 0.0;
+    __syncthreads();
+    float hx = 2 * CUDART_PI_F / Mr;
+    float x = dev_x[threadId];
+    float y = dev_y[threadId];
     if (threadId < N) {
-        float xi = fmodf(dev_x[threadId] * df, 2.0 * CUDART_PI_F);
+        float xi = fmodf(x * df, 2.0 * CUDART_PI_F);
         int m = 1 + ((int) (xi / hx));
+        // TODO can do some math so that we only have at most three iterations here.
+        // mmj + m = index, index-Mr, or index+Mr.
         for (int j = 0; j < kernelSize; ++j) {
             int mmj = -(kernelSize / 2) + j;
-            // TODO try __expf
-            float kj = expf(-0.25f * powf(xi - hx * (m + mmj), 2) / tau);
-            // Assuming Mr > Msp i.e. grid size greater than half of the kernel size
-            // TODO modulo instructions are apparently expensive.
-            // TODO use reduction for this step instead of atomicAdd.
+            // Assuming Mr > Msp i.e. grid size greater than half of the kernel size which is v reasonable
             int index = (m + mmj + Mr) % Mr;
-            atomicAdd(&(dev_ftau[index].x), dev_y[threadId] * kj);
+            if (index == blockIdx.y) {
+                float kj = expf(-0.25f * powf(xi - hx * (m + mmj), 2) / tau);
+                sumReal[tid] = y * kj;
+            }
         }
+    }
+    __syncthreads();
+
+    // sum with reduction
+    for (uint s=blockDim.x/2; s>0; s >>= 1) {
+        if (tid < s) {
+            sumReal[tid] += sumReal[tid+s];
+        }
+        __syncthreads();
+    }
+
+    // Write back to dev_ftau
+    if (tid == 0) {
+        atomicAdd(&dev_ftau[blockIdx.y].x, sumReal[tid]);
     }
 }
 
@@ -88,8 +148,17 @@ vector<Complex> nufftGpu(const vector<float> x, const vector<float> y, const int
     // Construct the convolved grid
     int blockSize = 1024;
     int gridSize = N / blockSize + 1;
+    bool optimize = true;
     cudaEventRecord(start1);
-    naiveGriddingKernel<<<gridSize, blockSize>>>(dev_x, dev_y, dev_ftau, df, param.tau, N, param.Mr, kernelSize);
+    if (optimize) {
+        //dim3 grid(gridSize, param.Mr);
+        //printf("For gridding we have %d x %d blocks\n", grid.x, grid.y);
+        //triedToBeParallelGriddingKernel <<<grid, blockSize, blockSize * sizeof(float)>>>(dev_x, dev_y, dev_ftau,
+        //        df, param.tau, N, param.Mr, kernelSize);
+    } else {
+        std::cout << "For gridding we have " << gridSize << " blocks.\n";
+        naiveGriddingKernel<<<gridSize, blockSize>>>(dev_x, dev_y, dev_ftau, df, param.tau, N, param.Mr, kernelSize);
+    }
     cudaEventRecord(stop1);
     CUDA_CALL(cudaPeekAtLastError());
     CUDA_CALL(cudaFree(dev_x));
@@ -106,20 +175,22 @@ vector<Complex> nufftGpu(const vector<float> x, const vector<float> y, const int
     CUDA_CALL(cudaMalloc((void **) &dev_kvec, M * sizeof(cufftComplex)));
     vector<float> k = getFreq(df, M);
     CUDA_CALL(cudaMemcpy(dev_kvec, k.data(), M * sizeof(float), cudaMemcpyHostToDevice));
-
-
     gridSize = (M / 2 / MAX_THREADS) + 1;
     blockSize = gridSize == 1 ? (M / 2) : MAX_THREADS;
     cudaEventRecord(start2);
     postProcessingKernel<<<gridSize, blockSize>>>(dev_Ftau, dev_yt, dev_kvec, N, M, param.Mr, param.tau);
     cudaEventRecord(stop2);
     CUDA_CALL(cudaPeekAtLastError());
+
+
     cudaEventSynchronize(stop1);
     cudaEventSynchronize(stop2);
     float ms1, ms2;
     cudaEventElapsedTime(&ms1, start1, stop1);
     cudaEventElapsedTime(&ms2, start2, stop2);
     std::cout << "Gridding kernel took " << ms1 <<  "ms; Post-processing kernel took " << ms2 << "ms.\n";
+
+
     vector<Complex> yt = vector<Complex>(M);
     CUDA_CALL(cudaMemcpy(yt.data(), dev_yt, M * sizeof(cufftComplex), cudaMemcpyDeviceToHost));
 
@@ -142,6 +213,8 @@ void queryGpus() {
         printf("  Device name: %s\n", prop.name);
         printf("  Major revision number: %d\n", prop.major);
         printf("  Minor revision number: %d\n", prop.minor);
+        // Added this
+        printf("  Maximum number of blocks: %d\n", prop.maxGridSize[0]);
         printf("  Total shared memory per block (Bytes): %u\n",  prop.sharedMemPerBlock);
         printf("  Total registers per block: %d\n",  prop.regsPerBlock);
         printf("  Warp size: %d\n",  prop.warpSize);
