@@ -36,6 +36,7 @@ __global__
 void
 instructionOptimizedGriddingKernel(float *dev_x, float *dev_y, cufftComplex *dev_ftau, float df, float tau,
                     int N, int Mr, int kernelSize) {
+    // same as NAIVE but with intrinsics and ILP for speeding up.
     int threadId = threadIdx.x + blockDim.x * blockIdx.x;
     float hx = 2 * CUDART_PI_F / Mr;
     float x = dev_x[threadId];
@@ -53,38 +54,42 @@ instructionOptimizedGriddingKernel(float *dev_x, float *dev_y, cufftComplex *dev
 }
 
 
-//__global__
-//void
-//useUpSharedMemoryGriddingKernel(float *dev_x, float *dev_y, cufftComplex *dev_ftau, float df, float tau,
-//                                int N, int Mr, int kernelSize, int shmemSize) {
-//    // Use shared memory to do reduction for each block.
-//    extern __shared__ float shmem[];
-//    int threadId = threadIdx.x + blockDim.x * blockIdx.x;
-//    float hx = 2 * CUDART_PI_F / Mr;
-//    float x = dev_x[threadId];
-//    float y = dev_y[threadId];
-//    float xi = fmodf(x * df, 2.0 * CUDART_PI_F);
-//    int m = 1 + ((int) (xi / hx));
-//    for(int iter=0; shmemSize * iter < Mr; ++iter) {
-//        if (threadId < N) {
-//            for (int j = 0; j < kernelSize; ++j) {
-//                int mmj = -(kernelSize / 2) + j;
-//                float kj = expf(-0.25f * powf(xi - hx * (m + mmj), 2) / tau);
-//                // Assuming Mr > Msp i.e. grid size greater than half of the kernel size which is v reasonable
-//                int index = (m + mmj + Mr) % Mr;
-//                // This is probably gonna cause bank conflict and warp divergence but still worth trying.
-//                if (((iter +1)*shmemSize > index) && (index > iter*shmemSize)) {
-//                    atomicAdd(&shmem[index], y * kj);
-//                }
-//            }
-//        }
-//        __syncthreads();
-//        // Now add the shmem numbers back to the main memory...
-//        if (threadId==0) {
-//            for
-//        }
-//    }
-//}
+__global__
+void
+shmemGriddingKernel(float *dev_x, float *dev_y, cufftComplex *dev_ftau, float df, float tau,
+                                int N, int Mr, int kernelSize) {
+    // Store the grid in shared memory and then sum the grid back to device memory.
+    extern __shared__ float shmem[];
+    int threadId = threadIdx.x + blockDim.x * blockIdx.x;
+    int tid = threadIdx.x;
+    float x = dev_x[threadId];
+    float y = dev_y[threadId];
+
+    while (tid < Mr) {
+        shmem[tid] = 0.0;
+        tid += blockDim.x;
+    }
+
+    float hx = 2 * CUDART_PI_F / Mr;
+    if (threadId < N) {
+        float xi = fmodf(x * df, 2.0 * CUDART_PI_F);
+        int m = 1 + ((int) (xi / hx));
+        for (int j = 0; j < kernelSize; ++j) {
+            int mmj = -(kernelSize / 2) + j;
+            float kj = expf(-0.25f * powf(xi - hx * (m + mmj), 2) / tau);
+            // Assuming Mr > Msp i.e. grid size greater than half of the kernel size which is v reasonable
+            // TODO modulo instructions are apparently expensive.
+            int index = (m + mmj + Mr) % Mr;
+            atomicAdd(&(shmem[index]), y * kj);
+        }
+    }
+    __syncthreads();
+    tid = threadIdx.x;
+    while (tid < Mr) {
+        atomicAdd(&(dev_ftau[tid].x), shmem[tid]);
+        tid += blockDim.x;
+    }
+}
 
 
 __global__
@@ -188,6 +193,7 @@ vector<Complex> nufftGpu(const vector<float> x, const vector<float> y, const int
     cudaEventRecord(start1);
     if (type == PARALLEL) {
         std::cout << "Using PARALLEL gridding scheme (this one is slower than NAIVE).\n";
+        std::cout << "!!!!!!!!!!!WARNING: UNBEARABLY SLOW!!!!!!!!!!!!!!!\n";
         dim3 grid(gridSize, param.Mr);
         printf("For gridding we have %d x %d blocks. Using the extra blockDim to parallelized sum for the grid\n",
                 grid.x, grid.y);
@@ -198,6 +204,10 @@ vector<Complex> nufftGpu(const vector<float> x, const vector<float> y, const int
         std::cout << "For gridding we have " << gridSize << " blocks.\n";
         naiveGriddingKernel<<<gridSize, blockSize>>>(dev_x, dev_y, dev_ftau, df, param.tau, N, param.Mr, kernelSize);
     } else if (type == SHMEM) {
+        std::cout << "Using SHMEM gridding scheme.\n";
+        std::cout << "For gridding we have " << gridSize << " blocks.\n";
+        shmemGriddingKernel<<<gridSize, blockSize, param.Mr * sizeof(float)>>>(dev_x, dev_y, dev_ftau, df,
+                param.tau, N, param.Mr, kernelSize);
 
     } else if (type == ILP) {
         std::cout << "Using ILP gridding scheme i.e. naive with instruction optimizations and loop unrolling.\n";
@@ -236,6 +246,10 @@ vector<Complex> nufftGpu(const vector<float> x, const vector<float> y, const int
     float ms1, ms2;
     cudaEventElapsedTime(&ms1, start1, stop1);
     cudaEventElapsedTime(&ms2, start2, stop2);
+    cudaEventDestroy(start1);
+    cudaEventDestroy(stop1);
+    cudaEventDestroy(start2);
+    cudaEventDestroy(stop2);
     std::cout << "Gridding kernel took " << ms1 <<  "ms; Post-processing kernel took " << ms2 << "ms.\n";
 
 

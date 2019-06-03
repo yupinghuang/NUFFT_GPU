@@ -55,22 +55,22 @@ vector<Complex> nufftCpu(const vector<float> x, const vector<float> y, const int
     float hx = 2 * PI / param.Mr;
     vector<int> mm(2 * param.Msp + 1);
     std::iota(mm.begin(), mm.end(), -param.Msp);
-    vector<float> kernel(mm.size(), 0);
+    vector<float> spread(mm.size(), 0);
 
     std::cout << "Gridding kernel has size " << mm.size() << "; grid has size " << param.Mr << ".\n";
 
     for (int i = 0; i < N; ++i) {
         float xi = fmodf((x[i] * df), (2.0f * PI));
         int m = 1 + static_cast<int>(xi / hx);
-        for (int j = 0; j < kernel.size(); j++) {
-            kernel[j] = expf(-0.25f * powf(xi - hx * (m + mm[j]), 2) / param.tau);
+        for (int j = 0; j < spread.size(); j++) {
+            spread[j] = expf(-0.25f * powf(xi - hx * (m + mm[j]), 2) / param.tau);
         }
         // Convolution
-        for (int j = 0; j < kernel.size(); j++) {
+        for (int j = 0; j < spread.size(); j++) {
             int index = (m + mm[j]) % param.Mr;
             // So that we end up with a positive modulo always.
             if (index < 0) { index += param.Mr; };
-            ftau[index] += y[i] * kernel[j];
+            ftau[index] += y[i] * spread[j];
         }
     }
 

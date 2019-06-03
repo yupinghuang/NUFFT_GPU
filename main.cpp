@@ -16,7 +16,9 @@ using std::string;
 void printHelpAndExit() {
     std::cerr << "Arguments: <testcase> <numSamples> <numFreqBin>\n";
     std::cerr << "numFreqBin must be an even number. Parameters are ignored when testcase is demo\n";
-    std::cerr << "Test cases are: demo, cpu, hybrid, gpu-naive, gpu-slow.\n";
+    std::cerr << "Test cases are: demo, cpu, hybrid, gpu-naive, gpu-ilp gpu-parallel gpu-shmem.\n";
+    std::cerr << "gpu-parallel is very slow.\n";
+    std::cerr << "gpu-shem only takes numFreqVub up to 4000 (number that would fit in the TIAN X shared memory).\n";
     exit(EXIT_FAILURE);
 }
 
@@ -26,6 +28,7 @@ string griddingImplementationToString(GriddingImplementation type) {
         case NAIVE: ans = "NAIVE"; break;
         case ILP: ans = "ILP"; break;
         case PARALLEL: ans = "PARALLEL"; break;
+        case SHMEM: ans = "SHMEM"; break;
         default: ans= "";
     }
     return ans;
@@ -149,7 +152,7 @@ void runGpu1DTest(int testSize, int M, GriddingImplementation type) {
     auto duration1 = std::chrono::duration_cast<std::chrono::milliseconds>(stop1 - start);
     auto duration2 = std::chrono::duration_cast<std::chrono::milliseconds>(stop2 - stop1);
     std::cout << "GPU NAIVE NUFFT completed in " << duration1.count() << " ms\n";
-    std::cout << "GPU" << griddingImplementationToString(type) << " NUFFT completed in "
+    std::cout << "GPU " << griddingImplementationToString(type) << " NUFFT completed in "
               << duration2.count() << " ms\n";
 }
 
@@ -169,7 +172,11 @@ void runTest(int argc, char *argv[]) {
         printDividingLine();
         runCpuGpu1DTest(50000000, 100000, NAIVE);
         printDividingLine();
+        runGpu1DTest(50000000, 4000, SHMEM);
+        printDividingLine();
         runGpu1DTest(50000000, 50000000, ILP);
+        printDividingLine();
+        runGpu1DTest(100000, 500, PARALLEL);
         return;
     }
     int testSize = atoi(argv[2]);
@@ -185,6 +192,15 @@ void runTest(int argc, char *argv[]) {
         runCpuHybridTest(testSize, M);
     } else if (testCase == "gpu-naive") {
         runCpuGpu1DTest(testSize, M, NAIVE);
+    } else if (testCase == "gpu-parallel") {
+        runGpu1DTest(testSize, M, PARALLEL);
+    } else if (testCase == "gpu-ilp") {
+        runGpu1DTest(testSize, M, ILP);
+    } else if (testCase == "gpu-shmem") {
+        if (M>4000) {
+            std::cerr << "gpu-shmem can't take more than 4000 frequency bins.\n";
+        }
+        runGpu1DTest(testSize, M, SHMEM);
     } else {
         std::cerr << "Invalid test case.\n";
         printHelpAndExit();
