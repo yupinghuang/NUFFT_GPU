@@ -16,38 +16,28 @@ using std::vector;
 // For testing the #pragma unroll macro
 #define TEST_KERNEL_SIZE 29
 
-
 __global__
 void
-useUpSharedMemoryGriddingKernel(float *dev_x, float *dev_y, cufftComplex *dev_ftau, float df, float tau,
-                                int N, int Mr, int kernelSize, int shmemSize) {
-    // Use shared memory to do reduction for each block.
-    extern __shared__ float shmem[];
+naiveGriddingKernel(float *dev_x, float *dev_y, cufftComplex *dev_ftau, float df, float tau,
+                    int N, int Mr, int kernelSize) {
     int threadId = threadIdx.x + blockDim.x * blockIdx.x;
     float hx = 2 * CUDART_PI_F / Mr;
-    float x = dev_x[threadId];
-    float y = dev_y[threadId];
-    float xi = fmodf(x * df, 2.0 * CUDART_PI_F);
-    int m = 1 + ((int) (xi / hx));
-    for(int iter=0; shmemSize * iter < Mr; ++iter) {
-        if (threadId < N) {
-            for (int j = 0; j < kernelSize; ++j) {
-                int mmj = -(kernelSize / 2) + j;
-                float kj = expf(-0.25f * powf(xi - hx * (m + mmj), 2) / tau);
-                // Assuming Mr > Msp i.e. grid size greater than half of the kernel size which is v reasonable
-                int index = (m + mmj + Mr) % Mr;
-                // This is probably gonna cause bank conflict and warp divergence but still worth trying.
-                if (((iter +1)*shmemSize > index) && (index > iter*shmemSize)) {
-                    atomicAdd(&shmem[index], y * kj);
-                }
-            }
-        }
-        __syncthreads();
-        if (threadId==0) {
-            for
+    if (threadId < N) {
+        float xi = fmodf(dev_x[threadId] * df, 2.0 * CUDART_PI_F);
+        int m = 1 + ((int) (xi / hx));
+        for (int j = 0; j < kernelSize; ++j) {
+            int mmj = -(kernelSize / 2) + j;
+            // TODO try __expf
+            float kj = expf(-0.25f * powf(xi - hx * (m + mmj), 2) / tau);
+            // Assuming Mr > Msp i.e. grid size greater than half of the kernel size which is v reasonable
+            // TODO modulo instructions are apparently expensive.
+            // TODO use reduction for this step instead of atomicAdd.
+            int index = (m + mmj + Mr) % Mr;
+            atomicAdd(&(dev_ftau[index].x), dev_y[threadId] * kj);
         }
     }
 }
+
 
 
 __global__
